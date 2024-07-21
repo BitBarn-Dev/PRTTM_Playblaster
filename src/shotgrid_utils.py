@@ -1,16 +1,28 @@
 import os
-import re
+import json
 import shotgun_api3
 from shotgun_api3 import Shotgun
 import webbrowser
+import re
 
-# Placeholder for your API keys
-SHOTGRID_URL = 'https://prttm.shotgrid.autodesk.com'
-SCRIPT_NAME = 'animation_publisher'
-SCRIPT_KEY = 'wyd7zivGjdqptsbwq?qphmqqk'
+def xor_encrypt_decrypt(data, key):
+    return ''.join(chr(ord(c) ^ ord(k)) for c, k in zip(data, key * (len(data) // len(key) + 1)))
+
+def load_encrypted_credentials(filename):
+    xor_key = "pineapples"  # XOR decryption key
+    with open(filename, 'r') as f:
+        credentials = json.load(f)
+    decrypted_name = xor_encrypt_decrypt(credentials["name"], xor_key)
+    decrypted_key = xor_encrypt_decrypt(credentials["key"], xor_key)
+    return decrypted_name, decrypted_key
+
+# Load encrypted credentials from the file
+credentials_filename = os.path.join(os.path.dirname(__file__), "credentials.creds")
+input_name, input_key = load_encrypted_credentials(credentials_filename)
 
 # Connect to ShotGrid
-sg = Shotgun(SHOTGRID_URL, SCRIPT_NAME, SCRIPT_KEY)
+SHOTGRID_URL = 'https://prttm.shotgrid.autodesk.com'
+sg = Shotgun(SHOTGRID_URL, input_name, input_key)
 
 PROJECT_ID = 222  # Hardcoded project ID
 
