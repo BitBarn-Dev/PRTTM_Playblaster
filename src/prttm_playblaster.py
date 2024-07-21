@@ -176,18 +176,6 @@ class PlayblastUI(QtWidgets.QDialog):
         render_width = self.width_spin.value()
         render_height = self.height_spin.value()
 
-        # Create an off-screen model panel
-        offscreen_panel = cmds.modelPanel()
-        offscreen_editor = cmds.modelPanel(offscreen_panel, query=True, modelEditor=True)
-
-        # Set the camera in the off-screen panel
-        cmds.modelPanel(offscreen_panel, edit=True, camera=current_camera)
-        
-        # Ensure the panel is offscreen
-        cmds.modelEditor(offscreen_editor, edit=True, displayLights='default')
-        cmds.modelEditor(offscreen_editor, edit=True, displayTextures=True)
-        cmds.modelEditor(offscreen_editor, edit=True, displayAppearance='smoothShaded')
-
         # Perform the playblast
         cmds.playblast(
             filename=output_pattern,
@@ -207,9 +195,6 @@ class PlayblastUI(QtWidgets.QDialog):
             framePadding=4
         )
 
-        # Delete the off-screen panel
-        cmds.deleteUI(offscreen_panel, panel=True)
-
         # Convert the image sequence to MP4 using FFmpeg
         self.convert_to_mp4(output_dir, frames_dir, name, ext)
 
@@ -226,6 +211,20 @@ class PlayblastUI(QtWidgets.QDialog):
             return
 
         mp4_output_path = os.path.join(output_dir, base_name + ".mp4")
+
+        # Check if the MP4 file already exists
+        if os.path.exists(mp4_output_path):
+            reply = QtWidgets.QMessageBox.question(
+                self,
+                "File Exists",
+                f"The file {mp4_output_path} already exists. Do you want to overwrite it?",
+                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            )
+            if reply == QtWidgets.QMessageBox.No:
+                return
+            else:
+                # Remove the existing file
+                os.remove(mp4_output_path)
 
         # Get the starting frame number
         first_frame = self.get_first_frame_number(frames_dir, base_name)
