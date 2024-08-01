@@ -1,5 +1,3 @@
-# GITDL = https://www.gyan.dev/ffmpeg/builds/
-
 import os
 import json
 import subprocess
@@ -30,9 +28,14 @@ class PlayblastUI(QtWidgets.QDialog):
         self.load_ffmpeg_path()
 
     def create_widgets(self):
-        self.camera_label = QtWidgets.QLabel("Camera/View:")
+        self.camera_label = QtWidgets.QLabel("Camera:")
         self.camera_combo = QtWidgets.QComboBox()
-        self.load_cameras()
+
+        self.viewport_label = QtWidgets.QLabel("Viewport:")
+        self.viewport_combo = QtWidgets.QComboBox()
+        
+        self.renderer_label = QtWidgets.QLabel("Renderer:")
+        self.renderer_combo = QtWidgets.QComboBox()
 
         self.width_label = QtWidgets.QLabel("Width:")
         self.width_spin = QtWidgets.QSpinBox()
@@ -54,8 +57,13 @@ class PlayblastUI(QtWidgets.QDialog):
         self.submit_button = QtWidgets.QPushButton("Submit")
         self.cancel_button = QtWidgets.QPushButton("Cancel")
 
+        self.load_viewports()
+        self.load_renderers()
+
     def create_layouts(self):
         form_layout = QtWidgets.QFormLayout()
+        form_layout.addRow(self.viewport_label, self.viewport_combo)
+        form_layout.addRow(self.renderer_label, self.renderer_combo)
         form_layout.addRow(self.camera_label, self.camera_combo)
         form_layout.addRow(self.width_label, self.width_spin)
         form_layout.addRow(self.height_label, self.height_spin)
@@ -77,11 +85,54 @@ class PlayblastUI(QtWidgets.QDialog):
         self.cancel_button.clicked.connect(self.reject)
         self.browse_button.clicked.connect(self.browse_ffmpeg_path)
         self.ffmpeg_line_edit.textChanged.connect(self.save_ffmpeg_path)
+        self.viewport_combo.currentIndexChanged.connect(self.update_camera_list)
+        self.renderer_combo.currentIndexChanged.connect(self.update_render_settings)
 
-    def load_cameras(self):
-        cameras = cmds.listCameras()
-        for camera in cameras:
-            self.camera_combo.addItem(camera)
+    def load_viewports(self):
+        self.viewport_combo.clear()
+        viewports = cmds.getPanel(type="modelPanel")
+        for viewport in viewports:
+            camera = cmds.modelPanel(viewport, query=True, camera=True)
+            self.viewport_combo.addItem(f"{viewport} ({camera})")
+        
+        active_viewport = cmds.getPanel(withFocus=True)
+        if active_viewport in viewports:
+            index = self.viewport_combo.findText(active_viewport, QtCore.Qt.MatchStartsWith)
+            if index >= 0:
+                self.viewport_combo.setCurrentIndex(index)
+        
+        self.update_camera_list()
+
+    def load_renderers(self):
+        self.renderer_combo.clear()
+        viewport_renderers = ['vp2Renderer', 'hwRender', 'vrayRE']  # Add or remove renderers as needed
+        for renderer in viewport_renderers:
+            self.renderer_combo.addItem(renderer)
+        
+        # Set default to 'vp2Renderer' (Viewport 2.0)
+        default_index = self.renderer_combo.findText('vp2Renderer')
+        if default_index >= 0:
+            self.renderer_combo.setCurrentIndex(default_index)
+
+    def update_camera_list(self):
+        self.camera_combo.clear()
+        selected_viewport = self.viewport_combo.currentText().split(' (')[0]
+        try:
+            camera = cmds.modelPanel(selected_viewport, query=True, camera=True)
+            if camera:
+                self.camera_combo.addItem(camera)
+            
+            # Add all cameras in the scene as options
+            all_cameras = cmds.listCameras()
+            for cam in all_cameras:
+                if cam != camera:
+                    self.camera_combo.addItem(cam)
+        except:
+            cmds.warning(f"Failed to query camera for viewport {selected_viewport}")
+
+    def update_render_settings(self):
+        # This method might not be necessary for viewport renderers
+        pass
 
     def load_render_settings(self):
         render_width = cmds.getAttr("defaultResolution.width")
@@ -130,72 +181,96 @@ class PlayblastUI(QtWidgets.QDialog):
             self.reject()
 
     def export_image_sequence(self):
-        # Get the current scene file path
         file_path = cmds.file(query=True, sceneName=True)
         
         if not file_path:
             cmds.error("Please save your scene before running the script.")
             return
 
-        # Parse the file path to determine the output directory and base filename
         file_dir = os.path.dirname(file_path)
         base_name = os.path.basename(file_path)
         name, ext = os.path.splitext(base_name)
 
-        # Replace "tasks" with "outputs"
         output_dir = file_dir.replace('/tasks/', '/outputs/')
         output_dir = os.path.join(output_dir, name, 'playblast')
         frames_dir = os.path.join(output_dir, 'frames')
-        output_dir = os.path.normpath(output_dir)  # Normalize path separators
-        frames_dir = os.path.normpath(frames_dir)  # Normalize path separators
+        output_dir = os.path.normpath(output_dir)
+        frames_dir = os.path.normpath(frames_dir)
         if not os.path.exists(frames_dir):
             os.makedirs(frames_dir)
 
-        # Determine the output file pattern
         output_pattern = os.path.join(frames_dir, name)
-        output_pattern = os.path.normpath(output_pattern)  # Normalize path separators
+        output_pattern = os.path.normpath(output_pattern)
 
-        # Debugging: Print output directory and file pattern
         print("Output Directory: {}".format(output_dir))
         print("Output File Pattern: {}".format(output_pattern))
 
-        # Get the selected camera
+        selected_viewport = self.viewport_combo.currentText().split(' (')[0]
+        selected_renderer = self.renderer_combo.currentText()
         current_camera = self.camera_combo.currentText()
 
-        # Debugging: Print the current camera
+        if not current_camera:
+            cmds.error("No camera selected. Please select a valid camera.")
+            return
+
         print("Using Camera: {}".format(current_camera))
 
-        # Get the camera shape node
-        camera_shape = cmds.listRelatives(current_camera, shapes=True)[0]
+        if not cmds.objExists(current_camera):
+            cmds.error(f"Camera '{current_camera}' does not exist in the scene.")
+            return
 
-        # Get the current frame range
+        try:
+            camera_shape = cmds.listRelatives(current_camera, shapes=True, type="camera")[0]
+        except:
+            cmds.error(f"Failed to get camera shape for '{current_camera}'. Please ensure it's a valid camera.")
+            return
+
         start_frame = cmds.playbackOptions(query=True, minTime=True)
         end_frame = cmds.playbackOptions(query=True, maxTime=True)
 
-        # Get render resolution
         render_width = self.width_spin.value()
         render_height = self.height_spin.value()
 
-        # Perform the playblast
-        cmds.playblast(
-            filename=output_pattern,
-            format='image',
-            startTime=start_frame,
-            endTime=end_frame,
-            sequenceTime=0,
-            clearCache=1,
-            viewer=0,
-            showOrnaments=0,
-            fp=4,  # force a particular format (jpg)
-            percent=100,
-            compression='jpg',
-            quality=100,
-            widthHeight=[render_width, render_height],
-            offScreen=True,
-            framePadding=4
-        )
+        # Set up the viewport for playblast
+        try:
+            cmds.modelEditor(selected_viewport, edit=True, displayAppearance='smoothShaded', camera=current_camera)
+            
+            # Set the viewport renderer
+            cmds.modelEditor(selected_viewport, edit=True, rendererName=selected_renderer)
+            
+            # Additional settings for specific renderers
+            if selected_renderer == 'vp2Renderer':
+                cmds.setAttr("hardwareRenderingGlobals.multiSampleEnable", 1)
+                cmds.setAttr("hardwareRenderingGlobals.ssaoEnable", 1)
+            elif selected_renderer == 'vrayRE':
+                # Add any specific V-Ray RT settings here if needed
+                pass
+        except Exception as e:
+            cmds.warning(f"Failed to set up viewport {selected_viewport}: {str(e)}. Using default viewport settings.")
 
-        # Convert the image sequence to MP4 using FFmpeg
+        # Perform the playblast
+        try:
+            cmds.playblast(
+                filename=output_pattern,
+                format='image',
+                startTime=start_frame,
+                endTime=end_frame,
+                sequenceTime=0,
+                clearCache=1,
+                viewer=0,
+                showOrnaments=0,
+                fp=4,
+                percent=100,
+                compression='jpg',
+                quality=100,
+                widthHeight=[render_width, render_height],
+                offScreen=True,
+                framePadding=4
+            )
+        except Exception as e:
+            cmds.error(f"Playblast failed: {str(e)}")
+            return
+
         self.convert_to_mp4(output_dir, frames_dir, name, ext)
 
     def convert_to_mp4(self, output_dir, frames_dir, base_name, ext):
@@ -204,7 +279,6 @@ class PlayblastUI(QtWidgets.QDialog):
             cmds.error("Invalid FFmpeg path.")
             return
 
-        # Get the current frame rate
         frame_rate = self.get_frame_rate()
         if frame_rate <= 0:
             cmds.error("Invalid frame rate.")
@@ -212,7 +286,6 @@ class PlayblastUI(QtWidgets.QDialog):
 
         mp4_output_path = os.path.join(output_dir, base_name + ".mp4")
 
-        # Check if the MP4 file already exists
         if os.path.exists(mp4_output_path):
             reply = QtWidgets.QMessageBox.question(
                 self,
@@ -223,10 +296,8 @@ class PlayblastUI(QtWidgets.QDialog):
             if reply == QtWidgets.QMessageBox.No:
                 return
             else:
-                # Remove the existing file
                 os.remove(mp4_output_path)
 
-        # Get the starting frame number
         first_frame = self.get_first_frame_number(frames_dir, base_name)
         if first_frame is None:
             cmds.error("No frames found in the specified directory.")
@@ -245,13 +316,12 @@ class PlayblastUI(QtWidgets.QDialog):
         print("FFmpeg Command: {}".format(" ".join(ffmpeg_command)))
         try:
             subprocess.run(ffmpeg_command, check=True)
-            self.open_mp4(mp4_output_path)  # Open the MP4 file on completion
-            self.upload_to_shotgrid(base_name + ext, proxy=mp4_output_path)  # Call the method to upload to ShotGrid with short name and proxy path
+            self.open_mp4(mp4_output_path)
+            self.upload_to_shotgrid(base_name + ext, proxy=mp4_output_path)
         except subprocess.CalledProcessError as e:
             cmds.error("FFmpeg failed with error: {}".format(e))
 
     def get_frame_rate(self):
-        # Try to get the current frame rate from the time unit
         time_unit = cmds.currentUnit(query=True, time=True)
         frame_rates = {
             'game': 15.0,
@@ -270,7 +340,6 @@ class PlayblastUI(QtWidgets.QDialog):
         return frames[0] if frames else None
 
     def open_mp4(self, mp4_path):
-        # Open the MP4 file using the default video player
         webbrowser.open(mp4_path)
 
     def upload_to_shotgrid(self, short_name, proxy):
@@ -288,3 +357,4 @@ if __name__ == "__main__":
 
     playblast_ui = PlayblastUI()
     playblast_ui.show()
+    shotgrid_utils.update_version(short)
